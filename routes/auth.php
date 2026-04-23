@@ -46,5 +46,13 @@ Route::post('/logout', [Auth\LoginController::class, 'logout'])
     ->middleware('auth')
     ->name('auth.logout');
 
+/*
+|--------------------------------------------------------------------------
+| OAuth Routes
+|--------------------------------------------------------------------------
+*/
+Route::get('/social/{provider}', [Auth\SocialController::class, 'redirect'])->name('auth.social.redirect');
+Route::get('/social/{provider}/callback', [Auth\SocialController::class, 'callback'])->name('auth.social.callback');
+
 // Catch any other combinations of routes and pass them off to the React component.
 Route::fallback([Auth\LoginController::class, 'index']);

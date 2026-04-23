@@ -3,7 +3,7 @@
     <head>
         <meta charset="utf-8">
         <meta http-equiv="X-UA-Compatible" content="IE=edge">
-        <title>{{ config('app.name', 'Pterodactyl') }} - @yield('title')</title>
+        <title>{{ config('app.name', 'ArcPanel') }} - @yield('title')</title>
         <meta content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" name="viewport">
         <meta name="_token" content="{{ csrf_token() }}">
 
@@ -33,13 +33,46 @@
             <script src="https://oss.maxcdn.com/html5shiv/3.7.3/html5shiv.min.js"></script>
             <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
             <![endif]-->
+
+            @php
+                $themeService = app(\Pterodactyl\Services\Arc\ArcThemeService::class);
+                $themeConfig = $themeService->getActiveThemeConfig();
+            @endphp
+            <style>
+                :root {
+                    --primary-color: {{ $themeConfig['primary_color'] }};
+                    --background-image: {{ $themeConfig['background'] ? "url('" . $themeConfig['background'] . "')" : 'none' }};
+                }
+                body {
+                    background-image: var(--background-image);
+                    background-size: cover;
+                    background-position: center;
+                }
+                .btn-primary {
+                    background-color: var(--primary-color);
+                    border-color: var(--primary-color);
+                }
+                .btn-primary:hover {
+                    background-color: var(--primary-color);
+                    border-color: var(--primary-color);
+                }
+                * {
+                    transition: all 0.3s ease;
+                }
+                @if(!$themeConfig['animations'])
+                * {
+                    animation: none !important;
+                    transition: none !important;
+                }
+                @endif
+            </style>
         @show
     </head>
     <body class="hold-transition skin-blue fixed sidebar-mini">
         <div class="wrapper">
             <header class="main-header">
                 <a href="{{ route('index') }}" class="logo">
-                    <span>{{ config('app.name', 'Pterodactyl') }}</span>
+                    <span>{{ config('app.name', 'ArcPanel') }}</span>
                 </a>
                 <nav class="navbar navbar-static-top">
                     <a href="#" class="sidebar-toggle" data-toggle="push-menu" role="button">
@@ -159,7 +192,7 @@
                     <strong><i class="fa fa-fw {{ $appIsGit ? 'fa-git-square' : 'fa-code-fork' }}"></i></strong> {{ $appVersion }}<br />
                     <strong><i class="fa fa-fw fa-clock-o"></i></strong> {{ round(microtime(true) - LARAVEL_START, 3) }}s
                 </div>
-                Copyright &copy; 2015 - {{ date('Y') }} <a href="https://pterodactyl.io/">Pterodactyl Software</a>.
+                Copyright &copy; 2015 - {{ date('Y') }} <a href="https://arcpanel.io/">ArcPanel Software</a>.
             </footer>
         </div>
         @section('footer-scripts')

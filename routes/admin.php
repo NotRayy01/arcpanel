@@ -226,3 +226,31 @@ Route::group(['prefix' => 'nests'], function () {
     Route::delete('/egg/{egg:id}', [Admin\Nests\EggController::class, 'destroy']);
     Route::delete('/egg/{egg:id}/variables/{variable:id}', [Admin\Nests\EggVariableController::class, 'destroy']);
 });
+
+/*
+|--------------------------------------------------------------------------
+| Arc Theme Controller Routes
+|--------------------------------------------------------------------------
+|
+| Endpoint: /admin/arc/themes
+|
+*/
+Route::group(['prefix' => 'arc/themes'], function () {
+    Route::get('/', [Admin\ArcThemeController::class, 'index'])->name('admin.arc.themes.index');
+    Route::patch('/', [Admin\ArcThemeController::class, 'update'])->name('admin.arc.themes.update');
+});
+
+/*
+|--------------------------------------------------------------------------
+| Arc Plugin Controller Routes
+|--------------------------------------------------------------------------
+|
+| Endpoint: /admin/arc/plugins
+|
+*/
+Route::group(['prefix' => 'arc/plugins'], function () {
+    Route::get('/', [Admin\ArcPluginController::class, 'index'])->name('admin.arc.plugins.index');
+    Route::post('/install', [Admin\ArcPluginController::class, 'install'])->name('admin.arc.plugins.install');
+    Route::post('/enable', [Admin\ArcPluginController::class, 'enable'])->name('admin.arc.plugins.enable');
+    Route::post('/disable', [Admin\ArcPluginController::class, 'disable'])->name('admin.arc.plugins.disable');
+});

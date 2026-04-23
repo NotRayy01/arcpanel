@@ -92,6 +92,8 @@ Route::group([
         Route::post('/chmod', [Client\Servers\FileController::class, 'chmod']);
         Route::middleware([ResourceLimit::FilePull->middleware()])
             ->post('/pull', [Client\Servers\FileController::class, 'pull']);
+        Route::get('/properties', [Client\Servers\FileController::class, 'properties']);
+        Route::post('/properties', [Client\Servers\FileController::class, 'saveProperties']);
         Route::get('/upload', Client\Servers\FileUploadController::class);
     });
 
@@ -147,5 +149,13 @@ Route::group([
         Route::post('/rename', [Client\Servers\SettingsController::class, 'rename']);
         Route::post('/reinstall', [Client\Servers\SettingsController::class, 'reinstall']);
         Route::put('/docker-image', [Client\Servers\SettingsController::class, 'dockerImage']);
+    });
+
+    Route::group(['prefix' => '/players'], function () {
+        Route::post('/ban', [Client\Servers\PlayerController::class, 'ban']);
+        Route::post('/unban', [Client\Servers\PlayerController::class, 'unban']);
+        Route::post('/kick', [Client\Servers\PlayerController::class, 'kick']);
+        Route::post('/op', [Client\Servers\PlayerController::class, 'op']);
+        Route::post('/deop', [Client\Servers\PlayerController::class, 'deop']);
     });
 });

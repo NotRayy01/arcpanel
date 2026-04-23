@@ -23,7 +23,7 @@ return [
     |
     */
 
-    'name' => env('APP_NAME', 'Pterodactyl'),
+    'name' => env('APP_NAME', 'ArcPanel'),
 
     /*
     |--------------------------------------------------------------------------
@@ -200,6 +200,7 @@ return [
         Pterodactyl\Providers\RouteServiceProvider::class,
         Pterodactyl\Providers\RepositoryServiceProvider::class,
         Pterodactyl\Providers\ViewComposerServiceProvider::class,
+        Pterodactyl\Providers\ArcServiceProvider::class,
 
         /*
          * Additional Dependencies

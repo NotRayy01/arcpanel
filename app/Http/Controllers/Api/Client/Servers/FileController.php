@@ -262,4 +262,53 @@ class FileController extends ClientApiController
 
         return new JsonResponse([], Response::HTTP_NO_CONTENT);
     }
+
+    /**
+     * Parses a .properties file into key-value pairs.
+     */
+    public function properties(GetFileContentsRequest $request, Server $server): JsonResponse
+    {
+        $contents = $this->fileRepository->setServer($server)->getContent(
+            $request->get('file'),
+            config('pterodactyl.files.max_edit_size')
+        );
+
+        $properties = [];
+        $lines = explode("\n", $contents);
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (empty($line) || str_starts_with($line, '#')) {
+                continue;
+            }
+            if (str_contains($line, '=')) {
+                [$key, $value] = explode('=', $line, 2);
+                $properties[trim($key)] = trim($value);
+            }
+        }
+
+        return new JsonResponse(['properties' => $properties]);
+    }
+
+    /**
+     * Saves key-value pairs back to a .properties file.
+     */
+    public function saveProperties(WriteFileContentRequest $request, Server $server): JsonResponse
+    {
+        $properties = $request->input('properties', []);
+        $content = '';
+        foreach ($properties as $key => $value) {
+            $content .= $key . '=' . $value . "\n";
+        }
+
+        $this->fileRepository->setServer($server)->putContent(
+            $request->get('file'),
+            $content
+        );
+
+        Activity::event('server:file.write')
+            ->property('file', $request->get('file'))
+            ->log();
+
+        return new JsonResponse([], Response::HTTP_NO_CONTENT);
+    }
 }
