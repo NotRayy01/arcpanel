@@ -2,7 +2,7 @@
 
 # ArcPanel Installer Script
 # Production-grade installer for ArcPanel - Multi-OS Support
-# Version: 2.4.0
+# Version: 2.5.0
 
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -56,7 +56,6 @@ ADMIN_PASS=""
 # UTILITY FUNCTIONS
 # ============================================================================
 
-# Initialize log file
 > "$LOG_FILE"
 
 spinner() {
@@ -112,7 +111,7 @@ print_header() {
     cat << "EOF"
     ╔══════════════════════════════════════════════════════════╗
     ║                                                          ║
-    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.4  🚀    ║
+    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.5  🚀    ║
     ║                                                          ║
     ╚══════════════════════════════════════════════════════════╝
 EOF
@@ -150,15 +149,20 @@ install_dependencies() {
     case "$PKG_MANAGER" in
         apt)
             ( 
+                # CLEANUP: Destroy broken repositories from previous attempts
+                rm -f /etc/apt/sources.list.d/*ondrej*.list
+                rm -f /etc/apt/sources.list.d/php.list*
+                
                 apt-get install -y software-properties-common ca-certificates lsb-release apt-transport-https curl wget
+                
                 if [ "$OS_TYPE" == "ubuntu" ]; then
                     add-apt-repository ppa:ondrej/php -y || true
                 elif [ "$OS_TYPE" == "debian" ]; then
                     wget -qO /etc/apt/trusted.gpg.d/php.gpg https://packages.sury.org/php/apt.gpg || true
-                    echo "deb https://packages.sury.org/php/ $(lsb_release -sc) main" > /etc/apt/sources.list.d/php.list || true
+                    echo "deb https://packages.sury.org/php/ $(lsb_release -sc) main" > /etc/apt/sources.list.d/php.list
                 fi
+                
                 apt-get update -y
-                # Swapped mysql-server for mariadb-server for full Debian compatibility
                 apt-get install -y nginx mariadb-server redis-server php${PHP_VERSION}-cli php${PHP_VERSION}-fpm php${PHP_VERSION}-mysql php${PHP_VERSION}-xml php${PHP_VERSION}-mbstring php${PHP_VERSION}-curl php${PHP_VERSION}-zip php${PHP_VERSION}-bcmath php${PHP_VERSION}-gd php${PHP_VERSION}-intl php${PHP_VERSION}-redis git unzip supervisor
             ) >> "$LOG_FILE" 2>&1 &
             ;;
