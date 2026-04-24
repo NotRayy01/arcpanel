@@ -2,7 +2,7 @@
 
 # ArcPanel Installer Script
 # Production-grade installer for ArcPanel - Multi-OS Support
-# Version: 2.3.0
+# Version: 2.4.0
 
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -43,6 +43,7 @@ INSTALL_DIR="/var/www/arcpanel"
 OS_TYPE=""
 PKG_MANAGER=""
 PHP_VERSION="8.2"
+LOG_FILE="/var/log/arcpanel_install.log"
 
 # Admin variables
 ADMIN_EMAIL=""
@@ -55,6 +56,9 @@ ADMIN_PASS=""
 # UTILITY FUNCTIONS
 # ============================================================================
 
+# Initialize log file
+> "$LOG_FILE"
+
 spinner() {
     local pid=$1
     local delay=0.1
@@ -64,10 +68,8 @@ spinner() {
     while kill -0 $pid 2>/dev/null; do
         printf "\r${CYAN}${frames[$((spin_count % ${#frames[@]}))]}${NC} Working..."
         sleep $delay
-        # FIX: Avoid bash set -e trap on 0 math evaluation
         spin_count=$((spin_count + 1))
     done
-    # Clear the spinner line completely
     printf "\r\033[K"
 }
 
@@ -98,7 +100,10 @@ detect_os() {
 log() { echo -e "${GREEN}${CHECKMARK}${NC} ${GREEN}$1${NC}"; }
 success() { echo -e "${GREEN}${STAR}${NC} ${GREEN}$1${NC}"; }
 warn() { echo -e "${YELLOW}${WARNING}${NC} ${YELLOW}$1${NC}"; }
-error() { echo -e "${RED}${CROSS}${NC} ${RED}$1${NC}"; }
+error() { 
+    echo -e "${RED}${CROSS}${NC} ${RED}$1${NC}"
+    echo -e "${YELLOW}${INFO}${NC} ${YELLOW}Check $LOG_FILE for details.${NC}"
+}
 info() { echo -e "${CYAN}${INFO}${NC} ${CYAN}$1${NC}"; }
 
 print_header() {
@@ -107,7 +112,7 @@ print_header() {
     cat << "EOF"
     ╔══════════════════════════════════════════════════════════╗
     ║                                                          ║
-    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.3  🚀    ║
+    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.4  🚀    ║
     ║                                                          ║
     ╚══════════════════════════════════════════════════════════╝
 EOF
@@ -126,11 +131,11 @@ print_section() {
 update_system() {
     print_section "${HOURGLASS} Updating System Packages"
     case "$PKG_MANAGER" in
-        apt) ( apt-get update -y && apt-get upgrade -y ) >/dev/null 2>&1 & ;;
-        dnf) dnf upgrade -y >/dev/null 2>&1 & ;;
-        yum) yum update -y >/dev/null 2>&1 & ;;
-        apk) ( apk update && apk upgrade ) >/dev/null 2>&1 & ;;
-        pacman) pacman -Syu --noconfirm >/dev/null 2>&1 & ;;
+        apt) ( apt-get update -y && apt-get upgrade -y ) >> "$LOG_FILE" 2>&1 & ;;
+        dnf) dnf upgrade -y >> "$LOG_FILE" 2>&1 & ;;
+        yum) yum update -y >> "$LOG_FILE" 2>&1 & ;;
+        apk) ( apk update && apk upgrade ) >> "$LOG_FILE" 2>&1 & ;;
+        pacman) pacman -Syu --noconfirm >> "$LOG_FILE" 2>&1 & ;;
     esac
     
     local pid=$!
@@ -144,9 +149,18 @@ install_dependencies() {
     
     case "$PKG_MANAGER" in
         apt)
-            ( add-apt-repository ppa:ondrej/php -y || true; \
-              apt-get update -y; \
-              apt-get install -y nginx mysql-server redis-server php${PHP_VERSION}-cli php${PHP_VERSION}-fpm php${PHP_VERSION}-mysql php${PHP_VERSION}-xml php${PHP_VERSION}-mbstring php${PHP_VERSION}-curl php${PHP_VERSION}-zip php${PHP_VERSION}-bcmath php${PHP_VERSION}-gd php${PHP_VERSION}-intl php${PHP_VERSION}-redis curl git unzip supervisor software-properties-common ) >/dev/null 2>&1 &
+            ( 
+                apt-get install -y software-properties-common ca-certificates lsb-release apt-transport-https curl wget
+                if [ "$OS_TYPE" == "ubuntu" ]; then
+                    add-apt-repository ppa:ondrej/php -y || true
+                elif [ "$OS_TYPE" == "debian" ]; then
+                    wget -qO /etc/apt/trusted.gpg.d/php.gpg https://packages.sury.org/php/apt.gpg || true
+                    echo "deb https://packages.sury.org/php/ $(lsb_release -sc) main" > /etc/apt/sources.list.d/php.list || true
+                fi
+                apt-get update -y
+                # Swapped mysql-server for mariadb-server for full Debian compatibility
+                apt-get install -y nginx mariadb-server redis-server php${PHP_VERSION}-cli php${PHP_VERSION}-fpm php${PHP_VERSION}-mysql php${PHP_VERSION}-xml php${PHP_VERSION}-mbstring php${PHP_VERSION}-curl php${PHP_VERSION}-zip php${PHP_VERSION}-bcmath php${PHP_VERSION}-gd php${PHP_VERSION}-intl php${PHP_VERSION}-redis git unzip supervisor
+            ) >> "$LOG_FILE" 2>&1 &
             ;;
         *)
             error "Please use Ubuntu/Debian for guaranteed full support."
@@ -163,12 +177,12 @@ install_dependencies() {
 install_nodejs_composer() {
     print_section "${ROCKET} Installing Node.js and Composer"
     
-    ( curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs certbot python3-certbot-nginx ) >/dev/null 2>&1 &
+    ( curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs certbot python3-certbot-nginx ) >> "$LOG_FILE" 2>&1 &
     local pid=$!
     spinner $pid
     wait $pid || { error "Node.js installation failed!"; exit 1; }
     
-    ( curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer ) >/dev/null 2>&1 &
+    ( curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer ) >> "$LOG_FILE" 2>&1 &
     pid=$!
     spinner $pid
     wait $pid || { error "Composer installation failed!"; exit 1; }
@@ -178,13 +192,13 @@ install_nodejs_composer() {
 
 setup_database() {
     print_section "${DATABASE} Setting Up Database"
-    systemctl start mysql >/dev/null 2>&1 || systemctl start mariadb >/dev/null 2>&1
-    systemctl enable mysql >/dev/null 2>&1 || systemctl enable mariadb >/dev/null 2>&1
+    systemctl start mariadb >> "$LOG_FILE" 2>&1 || systemctl start mysql >> "$LOG_FILE" 2>&1
+    systemctl enable mariadb >> "$LOG_FILE" 2>&1 || systemctl enable mysql >> "$LOG_FILE" 2>&1
 
-    mysql -u root -e "CREATE DATABASE IF NOT EXISTS $DB_NAME CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-    mysql -u root -e "CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';"
-    mysql -u root -e "GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';"
-    mysql -u root -e "FLUSH PRIVILEGES;"
+    mysql -u root -e "CREATE DATABASE IF NOT EXISTS $DB_NAME CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" >> "$LOG_FILE" 2>&1
+    mysql -u root -e "CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';" >> "$LOG_FILE" 2>&1
+    mysql -u root -e "GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';" >> "$LOG_FILE" 2>&1
+    mysql -u root -e "FLUSH PRIVILEGES;" >> "$LOG_FILE" 2>&1
     success "Database setup completed"
 }
 
@@ -194,7 +208,7 @@ install_arcpanel() {
     cd "$INSTALL_DIR"
     
     if [[ ! -d ".git" ]]; then
-        git clone https://github.com/NotRayy01/arcpanel.git . >/dev/null 2>&1 &
+        git clone https://github.com/NotRayy01/arcpanel.git . >> "$LOG_FILE" 2>&1 &
         local pid=$!
         spinner $pid
         wait $pid || { error "Git clone failed!"; exit 1; }
@@ -210,19 +224,19 @@ install_arcpanel() {
     sed -i "s|QUEUE_CONNECTION=.*|QUEUE_CONNECTION=redis|" .env
     sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=redis|" .env
 
-    composer install --no-dev --optimize-autoloader >/dev/null 2>&1 &
+    composer install --no-dev --optimize-autoloader >> "$LOG_FILE" 2>&1 &
     local pid=$!
     spinner $pid
     wait $pid || { error "Composer dependencies failed!"; exit 1; }
     
-    ( npm install && npm run build ) >/dev/null 2>&1 &
+    ( npm install && npm run build ) >> "$LOG_FILE" 2>&1 &
     pid=$!
     spinner $pid
     wait $pid || warn "NPM build had warnings, continuing..."
 
-    php artisan key:generate --force >/dev/null 2>&1
-    php artisan migrate --seed --force >/dev/null 2>&1
-    php artisan storage:link >/dev/null 2>&1
+    php artisan key:generate --force >> "$LOG_FILE" 2>&1
+    php artisan migrate --seed --force >> "$LOG_FILE" 2>&1
+    php artisan storage:link >> "$LOG_FILE" 2>&1
     success "ArcPanel deployed and migrated"
 }
 
@@ -236,11 +250,11 @@ create_admin() {
         --name-first="$ADMIN_FIRST" \
         --name-last="$ADMIN_LAST" \
         --password="$ADMIN_PASS" \
-        --admin=1 >/dev/null 2>&1 &
+        --admin=1 >> "$LOG_FILE" 2>&1 &
         
     local pid=$!
     spinner $pid
-    wait $pid || warn "User creation might have encountered an issue, check manually later."
+    wait $pid || warn "User creation encountered an issue. You can re-run 'php artisan p:user:make' manually later."
     success "Admin user logic completed!"
 }
 
@@ -277,18 +291,18 @@ EOF
     
     ln -sf /etc/nginx/sites-available/arcpanel /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
-    systemctl restart nginx
-    systemctl enable nginx >/dev/null 2>&1
+    systemctl restart nginx >> "$LOG_FILE" 2>&1
+    systemctl enable nginx >> "$LOG_FILE" 2>&1
     success "Nginx configured"
 }
 
 setup_ssl() {
     print_section "${LOCK} Setting Up SSL Certificate"
-    certbot --nginx -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --redirect >/dev/null 2>&1 &
+    certbot --nginx -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --redirect >> "$LOG_FILE" 2>&1 &
     local pid=$!
     spinner $pid
     wait $pid || warn "SSL generation failed. Check rate limits or DNS propagation."
-    success "SSL certificate and HTTPS redirect configured"
+    success "SSL certificate configured"
 }
 
 setup_queue_worker() {
@@ -308,9 +322,9 @@ stopasgroup=true
 stopwaitsecs=3600
 EOF
 
-    supervisorctl reread >/dev/null 2>&1 || true
-    supervisorctl update >/dev/null 2>&1 || true
-    supervisorctl start arcpanel-worker >/dev/null 2>&1 || true
+    supervisorctl reread >> "$LOG_FILE" 2>&1 || true
+    supervisorctl update >> "$LOG_FILE" 2>&1 || true
+    supervisorctl start arcpanel-worker >> "$LOG_FILE" 2>&1 || true
     success "Queue worker started"
 }
 
