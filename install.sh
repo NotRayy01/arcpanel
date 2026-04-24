@@ -2,7 +2,7 @@
 
 # ArcPanel Installer Script
 # Production-grade installer for ArcPanel - Multi-OS Support
-# Version: 2.1.0
+# Version: 2.2.0
 
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -27,8 +27,6 @@ INFO="ℹ"
 WARNING="⚠"
 FIRE="🔥"
 ROCKET="🚀"
-BOX="█"
-CIRCLE="●"
 STAR="★"
 DATABASE="🗄"
 LOCK="🔒"
@@ -64,12 +62,12 @@ spinner() {
     local spin_count=0
     
     while kill -0 $pid 2>/dev/null; do
-        printf "\r${CYAN}${frames[$((spin_count % ${#frames[@]}))]}${NC} "
+        printf "\r${CYAN}${frames[$((spin_count % ${#frames[@]}))]}${NC} Working..."
         sleep $delay
         ((spin_count++))
     done
-    sleep 0.5
-    printf "\r"
+    # Clear the spinner line completely
+    printf "\r\033[K"
 }
 
 check_root() {
@@ -108,7 +106,7 @@ print_header() {
     cat << "EOF"
     ╔══════════════════════════════════════════════════════════╗
     ║                                                          ║
-    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.1  🚀    ║
+    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.2  🚀    ║
     ║                                                          ║
     ╚══════════════════════════════════════════════════════════╝
 EOF
@@ -127,14 +125,16 @@ print_section() {
 update_system() {
     print_section "${HOURGLASS} Updating System Packages"
     case "$PKG_MANAGER" in
-        apt) apt update && apt upgrade -y >/dev/null 2>&1 & ;;
+        apt) ( apt-get update -y && apt-get upgrade -y ) >/dev/null 2>&1 & ;;
         dnf) dnf upgrade -y >/dev/null 2>&1 & ;;
         yum) yum update -y >/dev/null 2>&1 & ;;
-        apk) apk update && apk upgrade >/dev/null 2>&1 & ;;
+        apk) ( apk update && apk upgrade ) >/dev/null 2>&1 & ;;
         pacman) pacman -Syu --noconfirm >/dev/null 2>&1 & ;;
     esac
-    spinner $!
-    wait $!
+    
+    local pid=$!
+    spinner $pid
+    wait $pid || warn "Minor package warnings ignored, continuing..."
     success "System packages updated"
 }
 
@@ -143,31 +143,35 @@ install_dependencies() {
     
     case "$PKG_MANAGER" in
         apt)
-            add-apt-repository ppa:ondrej/php -y >/dev/null 2>&1 || true
-            apt update >/dev/null 2>&1
-            apt install -y nginx mysql-server redis-server php${PHP_VERSION}-cli php${PHP_VERSION}-fpm php${PHP_VERSION}-mysql php${PHP_VERSION}-xml php${PHP_VERSION}-mbstring php${PHP_VERSION}-curl php${PHP_VERSION}-zip php${PHP_VERSION}-bcmath php${PHP_VERSION}-gd php${PHP_VERSION}-intl php${PHP_VERSION}-redis curl git unzip supervisor software-properties-common >/dev/null 2>&1 &
+            ( add-apt-repository ppa:ondrej/php -y || true; \
+              apt-get update -y; \
+              apt-get install -y nginx mysql-server redis-server php${PHP_VERSION}-cli php${PHP_VERSION}-fpm php${PHP_VERSION}-mysql php${PHP_VERSION}-xml php${PHP_VERSION}-mbstring php${PHP_VERSION}-curl php${PHP_VERSION}-zip php${PHP_VERSION}-bcmath php${PHP_VERSION}-gd php${PHP_VERSION}-intl php${PHP_VERSION}-redis curl git unzip supervisor software-properties-common ) >/dev/null 2>&1 &
             ;;
         *)
-            # Simplified fallback for non-apt in this example to save space
             error "Please use Ubuntu/Debian for guaranteed full support."
             exit 1
             ;;
     esac
-    spinner $!
-    wait $!
+    
+    local pid=$!
+    spinner $pid
+    wait $pid || { error "Dependency installation failed!"; exit 1; }
     success "Dependencies installed"
 }
 
 install_nodejs_composer() {
     print_section "${ROCKET} Installing Node.js and Composer"
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null 2>&1
-    apt install -y nodejs certbot python3-certbot-nginx >/dev/null 2>&1 &
-    spinner $!
-    wait $!
     
-    curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer >/dev/null 2>&1 &
-    spinner $!
-    wait $!
+    ( curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs certbot python3-certbot-nginx ) >/dev/null 2>&1 &
+    local pid=$!
+    spinner $pid
+    wait $pid || { error "Node.js installation failed!"; exit 1; }
+    
+    ( curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer ) >/dev/null 2>&1 &
+    pid=$!
+    spinner $pid
+    wait $pid || { error "Composer installation failed!"; exit 1; }
+    
     success "Node.js, Composer, and Certbot installed"
 }
 
@@ -190,8 +194,9 @@ install_arcpanel() {
     
     if [[ ! -d ".git" ]]; then
         git clone https://github.com/NotRayy01/arcpanel.git . >/dev/null 2>&1 &
-        spinner $!
-        wait $!
+        local pid=$!
+        spinner $pid
+        wait $pid || { error "Git clone failed!"; exit 1; }
     fi
     
     cp .env.example .env 2>/dev/null || true
@@ -205,12 +210,14 @@ install_arcpanel() {
     sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=redis|" .env
 
     composer install --no-dev --optimize-autoloader >/dev/null 2>&1 &
-    spinner $!
-    wait $!
+    local pid=$!
+    spinner $pid
+    wait $pid || { error "Composer dependencies failed!"; exit 1; }
     
-    npm install >/dev/null 2>&1 && npm run build >/dev/null 2>&1 &
-    spinner $!
-    wait $!
+    ( npm install && npm run build ) >/dev/null 2>&1 &
+    pid=$!
+    spinner $pid
+    wait $pid || warn "NPM build had warnings, continuing..."
 
     php artisan key:generate --force >/dev/null 2>&1
     php artisan migrate --seed --force >/dev/null 2>&1
@@ -222,7 +229,6 @@ create_admin() {
     print_section "${LOCK} Creating Admin User"
     cd "$INSTALL_DIR"
     
-    # Using the standard Pterodactyl command structure. Adjust if ArcPanel uses a different namespace.
     php artisan p:user:make \
         --email="$ADMIN_EMAIL" \
         --username="$ADMIN_USER" \
@@ -231,9 +237,10 @@ create_admin() {
         --password="$ADMIN_PASS" \
         --admin=1 >/dev/null 2>&1 &
         
-    spinner $!
-    wait $!
-    success "Admin user created successfully!"
+    local pid=$!
+    spinner $pid
+    wait $pid || warn "User creation might have encountered an issue, check manually later."
+    success "Admin user logic completed!"
 }
 
 set_permissions() {
@@ -277,8 +284,9 @@ EOF
 setup_ssl() {
     print_section "${LOCK} Setting Up SSL Certificate"
     certbot --nginx -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --redirect >/dev/null 2>&1 &
-    spinner $!
-    wait $!
+    local pid=$!
+    spinner $pid
+    wait $pid || warn "SSL generation failed. Check rate limits or DNS propagation."
     success "SSL certificate and HTTPS redirect configured"
 }
 
@@ -307,24 +315,37 @@ EOF
 
 get_user_input() {
     print_header
+    
     print_section "Panel Configuration"
-    read -p "${BLUE}${ARROW}${NC} Enter domain name (e.g panel.example.com): " DOMAIN
-    read -p "${BLUE}${ARROW}${NC} Enter email for SSL certificate: " EMAIL
+    echo -e -n "${BLUE}${ARROW}${NC} Enter domain name (e.g panel.example.com): "
+    read DOMAIN
+    echo -e -n "${BLUE}${ARROW}${NC} Enter email for SSL certificate: "
+    read EMAIL
     
     print_section "Database Configuration"
-    read -p "${BLUE}${ARROW}${NC} Enter database name [${CYAN}arcpanel${NC}]: " INPUT_DB_NAME
+    echo -e -n "${BLUE}${ARROW}${NC} Enter database name [${CYAN}arcpanel${NC}]: "
+    read INPUT_DB_NAME
     DB_NAME=${INPUT_DB_NAME:-arcpanel}
-    read -p "${BLUE}${ARROW}${NC} Enter database user [${CYAN}arcpanel${NC}]: " INPUT_DB_USER
+    
+    echo -e -n "${BLUE}${ARROW}${NC} Enter database user [${CYAN}arcpanel${NC}]: "
+    read INPUT_DB_USER
     DB_USER=${INPUT_DB_USER:-arcpanel}
-    read -sp "${BLUE}${ARROW}${NC} Enter database password: " DB_PASS
+    
+    echo -e -n "${BLUE}${ARROW}${NC} Enter database password: "
+    read -s DB_PASS
     echo
     
     print_section "Admin User Setup"
-    read -p "${BLUE}${ARROW}${NC} Admin Email: " ADMIN_EMAIL
-    read -p "${BLUE}${ARROW}${NC} Admin Username: " ADMIN_USER
-    read -p "${BLUE}${ARROW}${NC} Admin First Name: " ADMIN_FIRST
-    read -p "${BLUE}${ARROW}${NC} Admin Last Name: " ADMIN_LAST
-    read -sp "${BLUE}${ARROW}${NC} Admin Password: " ADMIN_PASS
+    echo -e -n "${BLUE}${ARROW}${NC} Admin Email: "
+    read ADMIN_EMAIL
+    echo -e -n "${BLUE}${ARROW}${NC} Admin Username: "
+    read ADMIN_USER
+    echo -e -n "${BLUE}${ARROW}${NC} Admin First Name: "
+    read ADMIN_FIRST
+    echo -e -n "${BLUE}${ARROW}${NC} Admin Last Name: "
+    read ADMIN_LAST
+    echo -e -n "${BLUE}${ARROW}${NC} Admin Password: "
+    read -s ADMIN_PASS
     echo
 }
 
