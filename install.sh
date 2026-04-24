@@ -343,10 +343,10 @@ install_nodejs_composer() {
     print_section "${ROCKET} Installing Node.js and Composer"
     
     # Node.js
-    info "Installing Node.js 18..."
+    info "Installing Node.js 22..."
     case "$PKG_MANAGER" in
         apt)
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
+            curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null 2>&1
             apt install -y nodejs >/dev/null 2>&1 &
             ;;
         dnf|yum)
