@@ -57,13 +57,18 @@ spinner() {
     local pid=$1
     local delay=0.1
     local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+    local spin_count=0
     
     while kill -0 $pid 2>/dev/null; do
-        for frame in "${frames[@]}"; do
-            printf "\r${CYAN}${frame}${NC} "
-            sleep $delay
-        done
+        printf "\r${CYAN}${frames[$((spin_count % ${#frames[@]}))]}${NC} "
+        sleep $delay
+        ((spin_count++))
     done
+    
+    # Wait a bit more to ensure the process has actually finished
+    sleep 0.5
+    
+    # Clear the spinner
     printf "\r"
 }
 
@@ -228,17 +233,35 @@ install_dependencies() {
     
     case "$PKG_MANAGER" in
         apt)
-            packages=(
-                "nginx" "mysql-server" "redis-server"
-                "php${PHP_VERSION}-cli" "php${PHP_VERSION}-fpm" "php${PHP_VERSION}-mysql"
-                "php${PHP_VERSION}-xml" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-curl"
-                "php${PHP_VERSION}-zip" "php${PHP_VERSION}-bcmath" "php${PHP_VERSION}-gd"
-                "php${PHP_VERSION}-intl" "php${PHP_VERSION}-redis"
-                "curl" "git" "unzip" "supervisor" "software-properties-common"
-            )
-            apt install -y software-properties-common >/dev/null 2>&1
-            add-apt-repository ppa:ondrej/php -y >/dev/null 2>&1
-            apt update >/dev/null 2>&1
+            # Add PHP PPA
+            info "Adding PHP PPA..."
+            add-apt-repository ppa:ondrej/php -y >/dev/null 2>&1 || warn "PHP PPA may already be added"
+            
+            if [[ -n "$PHP_VERSION" ]]; then
+                packages=(
+                    "nginx" "mysql-server" "redis-server"
+                    "php${PHP_VERSION}-cli" "php${PHP_VERSION}-fpm" "php${PHP_VERSION}-mysql"
+                    "php${PHP_VERSION}-xml" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-curl"
+                    "php${PHP_VERSION}-zip" "php${PHP_VERSION}-bcmath" "php${PHP_VERSION}-gd"
+                    "php${PHP_VERSION}-intl" "php${PHP_VERSION}-redis"
+                    "curl" "git" "unzip" "supervisor" "software-properties-common"
+                )
+            else
+                packages=(
+                    "nginx" "mysql-server" "redis-server"
+                    "php-cli" "php-fpm" "php-mysql"
+                    "php-xml" "php-mbstring" "php-curl"
+                    "php-zip" "php-bcmath" "php-gd"
+                    "php-intl" "php-redis"
+                    "curl" "git" "unzip" "supervisor" "software-properties-common"
+                )
+            fi
+            
+            info "Updating package lists..."
+            if ! apt update >/dev/null 2>&1; then
+                error "Failed to update package lists"
+                exit 1
+            fi
             ;;
         dnf)
             packages=(
@@ -278,28 +301,40 @@ install_dependencies() {
     esac
     
     info "Installing ${#packages[@]} packages..."
+    echo -e "${CYAN}This may take a few minutes...${NC}"
     
     case "$PKG_MANAGER" in
         apt)
-            apt install -y "${packages[@]}" >/dev/null 2>&1 &
+            if ! apt install -y "${packages[@]}"; then
+                error "Failed to install packages with apt"
+                exit 1
+            fi
             ;;
         dnf)
-            dnf install -y "${packages[@]}" >/dev/null 2>&1 &
+            if ! dnf install -y "${packages[@]}"; then
+                error "Failed to install packages with dnf"
+                exit 1
+            fi
             ;;
         yum)
-            yum install -y "${packages[@]}" >/dev/null 2>&1 &
+            if ! yum install -y "${packages[@]}"; then
+                error "Failed to install packages with yum"
+                exit 1
+            fi
             ;;
         apk)
-            apk add "${packages[@]}" >/dev/null 2>&1 &
+            if ! apk add "${packages[@]}"; then
+                error "Failed to install packages with apk"
+                exit 1
+            fi
             ;;
         pacman)
-            pacman -S --noconfirm "${packages[@]}" >/dev/null 2>&1 &
+            if ! pacman -S --noconfirm "${packages[@]}"; then
+                error "Failed to install packages with pacman"
+                exit 1
+            fi
             ;;
     esac
-    
-    local pid=$!
-    spinner $pid
-    wait $pid
     
     success "Dependencies installed"
 }
@@ -542,8 +577,28 @@ set_permissions() {
 configure_nginx() {
     print_section "${GEAR} Configuring Nginx"
     
+    # Determine PHP socket path
+    local php_socket
+    if [[ -n "$PHP_VERSION" ]]; then
+        php_socket="/var/run/php/php${PHP_VERSION}-fpm.sock"
+    else
+        # Try to find the PHP socket
+        if [[ -S "/var/run/php/php8.2-fpm.sock" ]]; then
+            php_socket="/var/run/php/php8.2-fpm.sock"
+        elif [[ -S "/var/run/php/php8.1-fpm.sock" ]]; then
+            php_socket="/var/run/php/php8.1-fpm.sock"
+        elif [[ -S "/var/run/php/php8.0-fpm.sock" ]]; then
+            php_socket="/var/run/php/php8.0-fpm.sock"
+        elif [[ -S "/var/run/php/php-fpm.sock" ]]; then
+            php_socket="/var/run/php/php-fpm.sock"
+        else
+            warn "Could not determine PHP socket path, using default"
+            php_socket="/var/run/php/php-fpm.sock"
+        fi
+    fi
+    
     info "Creating Nginx configuration..."
-    cat > /etc/nginx/sites-available/arcpanel << 'EOF'
+    cat > /etc/nginx/sites-available/arcpanel << EOF
 server {
     listen 80;
     server_name $DOMAIN;
@@ -552,13 +607,13 @@ server {
     index index.php index.html index.htm;
 
     location / {
-        try_files $uri $uri/ /index.php?$query_string;
+        try_files \$uri \$uri/ /index.php?\$query_string;
     }
 
-    location ~ \.php$ {
+    location ~ \.php\$ {
         include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_pass unix:$php_socket;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
     }
 
@@ -566,16 +621,12 @@ server {
         deny all;
     }
 
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)\$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
     }
 }
 EOF
-    
-    # Replace variables
-    sed -i "s|\$DOMAIN|$DOMAIN|g" /etc/nginx/sites-available/arcpanel
-    sed -i "s|\$INSTALL_DIR|$INSTALL_DIR|g" /etc/nginx/sites-available/arcpanel
     
     success "Configuration created"
     
@@ -584,16 +635,17 @@ EOF
     rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
     
     info "Testing Nginx configuration..."
-    nginx -t >/dev/null 2>&1 &
-    local pid=$!
-    spinner $pid
-    wait $pid
+    if ! nginx -t >/dev/null 2>&1; then
+        error "Nginx configuration test failed"
+        nginx -t  # Show the error
+        exit 1
+    fi
     
     info "Restarting Nginx..."
-    systemctl restart nginx >/dev/null 2>&1 &
-    pid=$!
-    spinner $pid
-    wait $pid
+    if ! systemctl restart nginx >/dev/null 2>&1; then
+        error "Failed to restart Nginx"
+        exit 1
+    fi
     
     systemctl enable nginx >/dev/null 2>&1
     
