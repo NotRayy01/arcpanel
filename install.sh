@@ -2,7 +2,7 @@
 
 # ArcPanel Installer Script
 # Production-grade installer for ArcPanel - Multi-OS Support
-# Version: 2.2.0
+# Version: 2.3.0
 
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -64,7 +64,8 @@ spinner() {
     while kill -0 $pid 2>/dev/null; do
         printf "\r${CYAN}${frames[$((spin_count % ${#frames[@]}))]}${NC} Working..."
         sleep $delay
-        ((spin_count++))
+        # FIX: Avoid bash set -e trap on 0 math evaluation
+        spin_count=$((spin_count + 1))
     done
     # Clear the spinner line completely
     printf "\r\033[K"
@@ -106,7 +107,7 @@ print_header() {
     cat << "EOF"
     ╔══════════════════════════════════════════════════════════╗
     ║                                                          ║
-    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.2  🚀    ║
+    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.3  🚀    ║
     ║                                                          ║
     ╚══════════════════════════════════════════════════════════╝
 EOF
