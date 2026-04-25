@@ -2,7 +2,7 @@
 
 # ArcPanel Installer Script
 # Production-grade installer for ArcPanel - Multi-OS Support
-# Version: 2.7.0
+# Version: 2.8.0
 
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -112,7 +112,7 @@ print_header() {
     cat << "EOF"
     ╔══════════════════════════════════════════════════════════╗
     ║                                                          ║
-    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.7  🚀    ║
+    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.8  🚀    ║
     ║                                                          ║
     ╚══════════════════════════════════════════════════════════╝
 EOF
@@ -181,7 +181,8 @@ install_dependencies() {
 install_nodejs_composer() {
     print_section "${ROCKET} Installing Node.js and Composer"
     
-    ( curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs certbot python3-certbot-nginx ) >> "$LOG_FILE" 2>&1 &
+    # DOWNGRADED TO NODE 20 FOR STABILITY
+    ( curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs certbot python3-certbot-nginx ) >> "$LOG_FILE" 2>&1 &
     local pid=$!
     spinner $pid
     wait $pid || { error "Node.js installation failed!"; exit 1; }
@@ -203,6 +204,11 @@ setup_database() {
     mysql -u root -e "CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';" >> "$LOG_FILE" 2>&1
     mysql -u root -e "GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';" >> "$LOG_FILE" 2>&1
     mysql -u root -e "FLUSH PRIVILEGES;" >> "$LOG_FILE" 2>&1
+    
+    # === THE LARAVEL BOOT BUG HACK ===
+    # Inject an empty table so ArcPanel doesn't crash during its boot cycle
+    mysql -u root -e "CREATE TABLE IF NOT EXISTS $DB_NAME.arc_plugins (id INT AUTO_INCREMENT PRIMARY KEY, enabled TINYINT(1) DEFAULT 0);" >> "$LOG_FILE" 2>&1
+    
     success "Database setup completed"
 }
 
@@ -220,7 +226,6 @@ install_arcpanel() {
     
     cp .env.example .env 2>/dev/null || true
     
-    # Improved string replacement to prevent breaking on special characters
     sed -i "s|APP_URL=.*|APP_URL=\"https://$DOMAIN\"|" .env
     sed -i "s|DB_DATABASE=.*|DB_DATABASE=\"$DB_NAME\"|" .env
     sed -i "s|DB_USERNAME=.*|DB_USERNAME=\"$DB_USER\"|" .env
@@ -234,12 +239,12 @@ install_arcpanel() {
     spinner $pid
     wait $pid || { error "Composer dependencies failed!"; exit 1; }
     
-    ( npm install && npm run build ) >> "$LOG_FILE" 2>&1 &
+    # ADDED --legacy-peer-deps TO BYPASS OLD DEPENDENCY CONFLICTS
+    ( npm install --legacy-peer-deps && npm run build ) >> "$LOG_FILE" 2>&1 &
     pid=$!
     spinner $pid
     wait $pid || warn "NPM build had warnings, continuing..."
 
-    # Explicit error handling for Laravel setup
     if ! php artisan key:generate --force >> "$LOG_FILE" 2>&1; then
         error "Application key generation failed! Check logs."
         exit 1
