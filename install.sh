@@ -2,7 +2,7 @@
 
 # ArcPanel Installer Script
 # Production-grade installer for ArcPanel - Multi-OS Support
-# Version: 2.8.0
+# Version: 3.0.0
 
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -112,7 +112,7 @@ print_header() {
     cat << "EOF"
     ╔══════════════════════════════════════════════════════════╗
     ║                                                          ║
-    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.8  🚀    ║
+    ║   🚀  ArcPanel Installer - Multi-OS Edition v3.0  🚀    ║
     ║                                                          ║
     ╚══════════════════════════════════════════════════════════╝
 EOF
@@ -181,7 +181,6 @@ install_dependencies() {
 install_nodejs_composer() {
     print_section "${ROCKET} Installing Node.js and Composer"
     
-    # DOWNGRADED TO NODE 20 FOR STABILITY
     ( curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs certbot python3-certbot-nginx ) >> "$LOG_FILE" 2>&1 &
     local pid=$!
     spinner $pid
@@ -200,14 +199,15 @@ setup_database() {
     systemctl start mariadb >> "$LOG_FILE" 2>&1 || systemctl start mysql >> "$LOG_FILE" 2>&1
     systemctl enable mariadb >> "$LOG_FILE" 2>&1 || systemctl enable mysql >> "$LOG_FILE" 2>&1
 
-    mysql -u root -e "CREATE DATABASE IF NOT EXISTS $DB_NAME CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" >> "$LOG_FILE" 2>&1
+    # NEW FIX: Forcefully update the user password even if they already exist from a previous failed run
+    mysql -u root -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" >> "$LOG_FILE" 2>&1
     mysql -u root -e "CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';" >> "$LOG_FILE" 2>&1
-    mysql -u root -e "GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';" >> "$LOG_FILE" 2>&1
+    mysql -u root -e "ALTER USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';" >> "$LOG_FILE" 2>&1
+    mysql -u root -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';" >> "$LOG_FILE" 2>&1
     mysql -u root -e "FLUSH PRIVILEGES;" >> "$LOG_FILE" 2>&1
     
-    # === THE LARAVEL BOOT BUG HACK ===
-    # Inject an empty table so ArcPanel doesn't crash during its boot cycle
-    mysql -u root -e "CREATE TABLE IF NOT EXISTS $DB_NAME.arc_plugins (id INT AUTO_INCREMENT PRIMARY KEY, enabled TINYINT(1) DEFAULT 0);" >> "$LOG_FILE" 2>&1
+    # Inject dummy table to bypass Laravel Boot crash
+    mysql -u root -e "CREATE TABLE IF NOT EXISTS \`$DB_NAME\`.arc_plugins (id INT AUTO_INCREMENT PRIMARY KEY, enabled TINYINT(1) DEFAULT 0);" >> "$LOG_FILE" 2>&1
     
     success "Database setup completed"
 }
@@ -226,20 +226,20 @@ install_arcpanel() {
     
     cp .env.example .env 2>/dev/null || true
     
-    sed -i "s|APP_URL=.*|APP_URL=\"https://$DOMAIN\"|" .env
-    sed -i "s|DB_DATABASE=.*|DB_DATABASE=\"$DB_NAME\"|" .env
-    sed -i "s|DB_USERNAME=.*|DB_USERNAME=\"$DB_USER\"|" .env
-    sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=\"$DB_PASS\"|" .env
-    sed -i "s|CACHE_DRIVER=.*|CACHE_DRIVER=\"redis\"|" .env
-    sed -i "s|QUEUE_CONNECTION=.*|QUEUE_CONNECTION=\"redis\"|" .env
-    sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=\"redis\"|" .env
+    # NEW FIX: Changed delimiters from | to ~ to prevent password special character injection crashes
+    sed -i "s~APP_URL=.*~APP_URL=\"https://$DOMAIN\"~" .env
+    sed -i "s~DB_DATABASE=.*~DB_DATABASE=\"$DB_NAME\"~" .env
+    sed -i "s~DB_USERNAME=.*~DB_USERNAME=\"$DB_USER\"~" .env
+    sed -i "s~DB_PASSWORD=.*~DB_PASSWORD=\"$DB_PASS\"~" .env
+    sed -i "s~CACHE_DRIVER=.*~CACHE_DRIVER=\"redis\"~" .env
+    sed -i "s~QUEUE_CONNECTION=.*~QUEUE_CONNECTION=\"redis\"~" .env
+    sed -i "s~SESSION_DRIVER=.*~SESSION_DRIVER=\"redis\"~" .env
 
     composer update --no-dev --optimize-autoloader >> "$LOG_FILE" 2>&1 &
     local pid=$!
     spinner $pid
     wait $pid || { error "Composer dependencies failed!"; exit 1; }
     
-    # ADDED --legacy-peer-deps TO BYPASS OLD DEPENDENCY CONFLICTS
     ( npm install --legacy-peer-deps && npm run build ) >> "$LOG_FILE" 2>&1 &
     pid=$!
     spinner $pid
@@ -249,6 +249,8 @@ install_arcpanel() {
         error "Application key generation failed! Check logs."
         exit 1
     fi
+    
+    find database/migrations -type f -name "*create_arc_plugins_table.php" -exec sed -i "s/Schema::create('arc_plugins'/Schema::dropIfExists('arc_plugins'); Schema::create('arc_plugins'/g" {} + 2>/dev/null || true
     
     if ! php artisan migrate --seed --force >> "$LOG_FILE" 2>&1; then
         error "Database migration failed! Check logs."
