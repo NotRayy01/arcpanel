@@ -2,7 +2,7 @@
 
 # ArcPanel Installer Script
 # Production-grade installer for ArcPanel - Multi-OS Support
-# Version: 3.0.0
+# Version: 3.1.0
 
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -112,7 +112,7 @@ print_header() {
     cat << "EOF"
     ╔══════════════════════════════════════════════════════════╗
     ║                                                          ║
-    ║   🚀  ArcPanel Installer - Multi-OS Edition v3.0  🚀    ║
+    ║   🚀  ArcPanel Installer - Multi-OS Edition v3.1  🚀    ║
     ║                                                          ║
     ╚══════════════════════════════════════════════════════════╝
 EOF
@@ -199,8 +199,10 @@ setup_database() {
     systemctl start mariadb >> "$LOG_FILE" 2>&1 || systemctl start mysql >> "$LOG_FILE" 2>&1
     systemctl enable mariadb >> "$LOG_FILE" 2>&1 || systemctl enable mysql >> "$LOG_FILE" 2>&1
 
-    # NEW FIX: Forcefully update the user password even if they already exist from a previous failed run
-    mysql -u root -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" >> "$LOG_FILE" 2>&1
+    # Nuke and pave: Destroy ghost tables from previous runs
+    mysql -u root -e "DROP DATABASE IF EXISTS \`$DB_NAME\`;" >> "$LOG_FILE" 2>&1
+
+    mysql -u root -e "CREATE DATABASE \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" >> "$LOG_FILE" 2>&1
     mysql -u root -e "CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';" >> "$LOG_FILE" 2>&1
     mysql -u root -e "ALTER USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';" >> "$LOG_FILE" 2>&1
     mysql -u root -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';" >> "$LOG_FILE" 2>&1
@@ -226,7 +228,6 @@ install_arcpanel() {
     
     cp .env.example .env 2>/dev/null || true
     
-    # NEW FIX: Changed delimiters from | to ~ to prevent password special character injection crashes
     sed -i "s~APP_URL=.*~APP_URL=\"https://$DOMAIN\"~" .env
     sed -i "s~DB_DATABASE=.*~DB_DATABASE=\"$DB_NAME\"~" .env
     sed -i "s~DB_USERNAME=.*~DB_USERNAME=\"$DB_USER\"~" .env
@@ -250,8 +251,24 @@ install_arcpanel() {
         exit 1
     fi
     
+    # ==============================================================
+    # THE ARCPANEL DEVELOPER PATCH SUITE
+    # ==============================================================
+    
+    # Patch 1: The arc_plugins boot bypass
     find database/migrations -type f -name "*create_arc_plugins_table.php" -exec sed -i "s/Schema::create('arc_plugins'/Schema::dropIfExists('arc_plugins'); Schema::create('arc_plugins'/g" {} + 2>/dev/null || true
     
+    # Patch 2: The social_accounts BIGINT mismatch crash
+    # Downgrade foreignId to an unsignedInteger to match Pterodactyl's core framework
+    find database/migrations -type f -name "*create_social_accounts_table.php" -exec sed -i 's/foreignId/unsignedInteger/g' {} + 2>/dev/null || true
+    find database/migrations -type f -name "*create_social_accounts_table.php" -exec sed -i 's/unsignedBigInteger/unsignedInteger/g' {} + 2>/dev/null || true
+    
+    # Strip the broken table linkages
+    find database/migrations -type f -name "*create_social_accounts_table.php" -exec sed -i 's/->constrained()[^;]*//g' {} + 2>/dev/null || true
+    find database/migrations -type f -name "*create_social_accounts_table.php" -exec sed -i '/->foreign(/d' {} + 2>/dev/null || true
+    
+    # ==============================================================
+
     if ! php artisan migrate --seed --force >> "$LOG_FILE" 2>&1; then
         error "Database migration failed! Check logs."
         exit 1
