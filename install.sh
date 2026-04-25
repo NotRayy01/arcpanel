@@ -2,7 +2,7 @@
 
 # ArcPanel Installer Script
 # Production-grade installer for ArcPanel - Multi-OS Support
-# Version: 2.6.0
+# Version: 2.7.0
 
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -112,7 +112,7 @@ print_header() {
     cat << "EOF"
     ╔══════════════════════════════════════════════════════════╗
     ║                                                          ║
-    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.6  🚀    ║
+    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.7  🚀    ║
     ║                                                          ║
     ╚══════════════════════════════════════════════════════════╝
 EOF
@@ -220,15 +220,15 @@ install_arcpanel() {
     
     cp .env.example .env 2>/dev/null || true
     
-    sed -i "s|APP_URL=.*|APP_URL=https://$DOMAIN|" .env
-    sed -i "s|DB_DATABASE=.*|DB_DATABASE=$DB_NAME|" .env
-    sed -i "s|DB_USERNAME=.*|DB_USERNAME=$DB_USER|" .env
-    sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=$DB_PASS|" .env
-    sed -i "s|CACHE_DRIVER=.*|CACHE_DRIVER=redis|" .env
-    sed -i "s|QUEUE_CONNECTION=.*|QUEUE_CONNECTION=redis|" .env
-    sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=redis|" .env
+    # Improved string replacement to prevent breaking on special characters
+    sed -i "s|APP_URL=.*|APP_URL=\"https://$DOMAIN\"|" .env
+    sed -i "s|DB_DATABASE=.*|DB_DATABASE=\"$DB_NAME\"|" .env
+    sed -i "s|DB_USERNAME=.*|DB_USERNAME=\"$DB_USER\"|" .env
+    sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=\"$DB_PASS\"|" .env
+    sed -i "s|CACHE_DRIVER=.*|CACHE_DRIVER=\"redis\"|" .env
+    sed -i "s|QUEUE_CONNECTION=.*|QUEUE_CONNECTION=\"redis\"|" .env
+    sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=\"redis\"|" .env
 
-    # Switched to 'update' to fix the broken lock file in the repository
     composer update --no-dev --optimize-autoloader >> "$LOG_FILE" 2>&1 &
     local pid=$!
     spinner $pid
@@ -239,9 +239,19 @@ install_arcpanel() {
     spinner $pid
     wait $pid || warn "NPM build had warnings, continuing..."
 
-    php artisan key:generate --force >> "$LOG_FILE" 2>&1
-    php artisan migrate --seed --force >> "$LOG_FILE" 2>&1
-    php artisan storage:link >> "$LOG_FILE" 2>&1
+    # Explicit error handling for Laravel setup
+    if ! php artisan key:generate --force >> "$LOG_FILE" 2>&1; then
+        error "Application key generation failed! Check logs."
+        exit 1
+    fi
+    
+    if ! php artisan migrate --seed --force >> "$LOG_FILE" 2>&1; then
+        error "Database migration failed! Check logs."
+        exit 1
+    fi
+    
+    php artisan storage:link >> "$LOG_FILE" 2>&1 || true
+    
     success "ArcPanel deployed and migrated"
 }
 
