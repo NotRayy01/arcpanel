@@ -2,10 +2,11 @@
 
 # ArcPanel Installer Script
 # Production-grade installer for ArcPanel - Multi-OS Support
-# Version: 2.5.0
+# Version: 2.6.0
 
 set -e
 export DEBIAN_FRONTEND=noninteractive
+export COMPOSER_ALLOW_SUPERUSER=1
 
 # ============================================================================
 # COLOR CODES & SYMBOLS
@@ -111,7 +112,7 @@ print_header() {
     cat << "EOF"
     ╔══════════════════════════════════════════════════════════╗
     ║                                                          ║
-    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.5  🚀    ║
+    ║   🚀  ArcPanel Installer - Multi-OS Edition v2.6  🚀    ║
     ║                                                          ║
     ╚══════════════════════════════════════════════════════════╝
 EOF
@@ -149,7 +150,6 @@ install_dependencies() {
     case "$PKG_MANAGER" in
         apt)
             ( 
-                # CLEANUP: Destroy broken repositories from previous attempts
                 rm -f /etc/apt/sources.list.d/*ondrej*.list
                 rm -f /etc/apt/sources.list.d/php.list*
                 
@@ -228,7 +228,8 @@ install_arcpanel() {
     sed -i "s|QUEUE_CONNECTION=.*|QUEUE_CONNECTION=redis|" .env
     sed -i "s|SESSION_DRIVER=.*|SESSION_DRIVER=redis|" .env
 
-    composer install --no-dev --optimize-autoloader >> "$LOG_FILE" 2>&1 &
+    # Switched to 'update' to fix the broken lock file in the repository
+    composer update --no-dev --optimize-autoloader >> "$LOG_FILE" 2>&1 &
     local pid=$!
     spinner $pid
     wait $pid || { error "Composer dependencies failed!"; exit 1; }
