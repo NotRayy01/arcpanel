@@ -2,7 +2,7 @@
 
 # ArcPanel Installer Script
 # Production-grade installer for ArcPanel - Multi-OS Support
-# Version: 3.1.0
+# Version: 3.3.0
 
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -36,6 +36,7 @@ GEAR="⚙"
 
 # Global variables
 DOMAIN=""
+USE_CERTBOT="y"
 EMAIL=""
 DB_NAME="arcpanel"
 DB_USER="arcpanel"
@@ -112,7 +113,7 @@ print_header() {
     cat << "EOF"
     ╔══════════════════════════════════════════════════════════╗
     ║                                                          ║
-    ║   🚀  ArcPanel Installer - Multi-OS Edition v3.1  🚀    ║
+    ║   🚀  ArcPanel Installer - Multi-OS Edition v3.3  🚀    ║
     ║                                                          ║
     ╚══════════════════════════════════════════════════════════╝
 EOF
@@ -181,7 +182,12 @@ install_dependencies() {
 install_nodejs_composer() {
     print_section "${ROCKET} Installing Node.js and Composer"
     
-    ( curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs certbot python3-certbot-nginx ) >> "$LOG_FILE" 2>&1 &
+    local NODE_PACKAGES="nodejs"
+    if [[ "$USE_CERTBOT" =~ ^[Yy]$ ]]; then
+        NODE_PACKAGES="nodejs certbot python3-certbot-nginx"
+    fi
+
+    ( curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y $NODE_PACKAGES ) >> "$LOG_FILE" 2>&1 &
     local pid=$!
     spinner $pid
     wait $pid || { error "Node.js installation failed!"; exit 1; }
@@ -191,7 +197,7 @@ install_nodejs_composer() {
     spinner $pid
     wait $pid || { error "Composer installation failed!"; exit 1; }
     
-    success "Node.js, Composer, and Certbot installed"
+    success "Node.js and Composer installed"
 }
 
 setup_database() {
@@ -199,16 +205,13 @@ setup_database() {
     systemctl start mariadb >> "$LOG_FILE" 2>&1 || systemctl start mysql >> "$LOG_FILE" 2>&1
     systemctl enable mariadb >> "$LOG_FILE" 2>&1 || systemctl enable mysql >> "$LOG_FILE" 2>&1
 
-    # Nuke and pave: Destroy ghost tables from previous runs
     mysql -u root -e "DROP DATABASE IF EXISTS \`$DB_NAME\`;" >> "$LOG_FILE" 2>&1
-
     mysql -u root -e "CREATE DATABASE \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" >> "$LOG_FILE" 2>&1
     mysql -u root -e "CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';" >> "$LOG_FILE" 2>&1
     mysql -u root -e "ALTER USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';" >> "$LOG_FILE" 2>&1
     mysql -u root -e "GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';" >> "$LOG_FILE" 2>&1
     mysql -u root -e "FLUSH PRIVILEGES;" >> "$LOG_FILE" 2>&1
     
-    # Inject dummy table to bypass Laravel Boot crash
     mysql -u root -e "CREATE TABLE IF NOT EXISTS \`$DB_NAME\`.arc_plugins (id INT AUTO_INCREMENT PRIMARY KEY, enabled TINYINT(1) DEFAULT 0);" >> "$LOG_FILE" 2>&1
     
     success "Database setup completed"
@@ -251,24 +254,12 @@ install_arcpanel() {
         exit 1
     fi
     
-    # ==============================================================
-    # THE ARCPANEL DEVELOPER PATCH SUITE
-    # ==============================================================
-    
-    # Patch 1: The arc_plugins boot bypass
     find database/migrations -type f -name "*create_arc_plugins_table.php" -exec sed -i "s/Schema::create('arc_plugins'/Schema::dropIfExists('arc_plugins'); Schema::create('arc_plugins'/g" {} + 2>/dev/null || true
-    
-    # Patch 2: The social_accounts BIGINT mismatch crash
-    # Downgrade foreignId to an unsignedInteger to match Pterodactyl's core framework
     find database/migrations -type f -name "*create_social_accounts_table.php" -exec sed -i 's/foreignId/unsignedInteger/g' {} + 2>/dev/null || true
     find database/migrations -type f -name "*create_social_accounts_table.php" -exec sed -i 's/unsignedBigInteger/unsignedInteger/g' {} + 2>/dev/null || true
-    
-    # Strip the broken table linkages
     find database/migrations -type f -name "*create_social_accounts_table.php" -exec sed -i 's/->constrained()[^;]*//g' {} + 2>/dev/null || true
     find database/migrations -type f -name "*create_social_accounts_table.php" -exec sed -i '/->foreign(/d' {} + 2>/dev/null || true
     
-    # ==============================================================
-
     if ! php artisan migrate --seed --force >> "$LOG_FILE" 2>&1; then
         error "Database migration failed! Check logs."
         exit 1
@@ -306,6 +297,9 @@ configure_nginx() {
     print_section "${GEAR} Configuring Nginx"
     local php_socket="/var/run/php/php${PHP_VERSION}-fpm.sock"
     
+    systemctl stop apache2 >/dev/null 2>&1 || true
+    systemctl disable apache2 >/dev/null 2>&1 || true
+    
     cat > /etc/nginx/sites-available/arcpanel << EOF
 server {
     listen 80;
@@ -330,18 +324,31 @@ EOF
     
     ln -sf /etc/nginx/sites-available/arcpanel /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
-    systemctl restart nginx >> "$LOG_FILE" 2>&1
+    
+    if ! nginx -t >> "$LOG_FILE" 2>&1; then
+        error "Nginx configuration test failed! Here is the error:"
+        nginx -t
+        exit 1
+    fi
+    
+    if ! systemctl restart nginx >> "$LOG_FILE" 2>&1; then
+        error "Failed to start Nginx. Port 80 might still be blocked."
+        exit 1
+    fi
+    
     systemctl enable nginx >> "$LOG_FILE" 2>&1
-    success "Nginx configured"
+    success "Nginx configured and listening on port 80"
 }
 
 setup_ssl() {
     print_section "${LOCK} Setting Up SSL Certificate"
-    certbot --nginx -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --redirect >> "$LOG_FILE" 2>&1 &
-    local pid=$!
-    spinner $pid
-    wait $pid || warn "SSL generation failed. Check rate limits or DNS propagation."
-    success "SSL certificate configured"
+    
+    if ! certbot --nginx -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --redirect >> "$LOG_FILE" 2>&1; then
+        warn "SSL generation failed! Your domain DNS might not be propagated yet."
+        warn "You can secure the panel later by running: certbot --nginx -d $DOMAIN"
+    else
+        success "SSL certificate configured"
+    fi
 }
 
 setup_queue_worker() {
@@ -373,8 +380,15 @@ get_user_input() {
     print_section "Panel Configuration"
     echo -e -n "${BLUE}${ARROW}${NC} Enter domain name (e.g panel.example.com): "
     read DOMAIN
-    echo -e -n "${BLUE}${ARROW}${NC} Enter email for SSL certificate: "
-    read EMAIL
+    
+    echo -e -n "${BLUE}${ARROW}${NC} Configure SSL with Let's Encrypt/Certbot? (y/n) [y]: "
+    read INPUT_USE_CERTBOT
+    USE_CERTBOT=${INPUT_USE_CERTBOT:-y}
+    
+    if [[ "$USE_CERTBOT" =~ ^[Yy]$ ]]; then
+        echo -e -n "${BLUE}${ARROW}${NC} Enter email for SSL certificate: "
+        read EMAIL
+    fi
     
     print_section "Database Configuration"
     echo -e -n "${BLUE}${ARROW}${NC} Enter database name [${CYAN}arcpanel${NC}]: "
@@ -419,7 +433,15 @@ main() {
     create_admin
     set_permissions
     configure_nginx
-    setup_ssl
+    
+    if [[ "$USE_CERTBOT" =~ ^[Yy]$ ]]; then
+        setup_ssl
+    else
+        print_section "${LOCK} SSL Configuration"
+        info "Skipping Certbot setup. Cloudflare Tunnel mode active."
+        info "Ensure your cloudflared config points to http://localhost:80"
+    fi
+    
     setup_queue_worker
 
     # Final Output Screen
@@ -440,7 +462,7 @@ main() {
     echo -e "${BLUE}${ARROW}${NC} ${WHITE}Database:${NC}   ${GREEN}$DB_NAME${NC}"
     echo -e "${BLUE}${ARROW}${NC} ${WHITE}DB User:${NC}    ${GREEN}$DB_USER${NC}"
     echo
-    echo -e "${FIRE} ${MAGENTA}Your ArcPanel is live! Setup your nodes and eggs next.${NC} ${FIRE}\n"
+    echo -e "${FIRE} ${MAGENTA}Your ArcPanel is live! Setup your Cloudflare Tunnel next.${NC} ${FIRE}\n"
 }
 
 main "$@"
